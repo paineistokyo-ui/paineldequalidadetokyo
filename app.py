@@ -1311,7 +1311,7 @@ if not fast_mode:
     det = viewQ.copy()
     with st.expander("Filtros deste quadro (opcional)", expanded=False):
         c1, c2, c3 = st.columns(3)
-        c4, c5, c6 = st.columns(3)
+        c4, c5, c6, c7 = st.columns(4)
 
         _d = pd.to_datetime(det["DATA"], errors="coerce").dt.date
         _dmin, _dmax = (_d.min(), _d.max()) if _d.notna().any() else (date(2000,1,1), date(2000,1,1))
@@ -1329,7 +1329,7 @@ if not fast_mode:
         f_grav        = c4.multiselect("Gravidade", opts_grav, default=opts_grav)
         f_cidade      = c5.multiselect("Cidade / Unidade", opts_cidade, default=opts_cidade)
         f_vist        = c6.multiselect("Vistoriador", opts_vist, default=opts_vist)
-        f_analista    = c6.multiselect("Analista", opts_analista, default=opts_analista, key="det_analista")
+        f_analista    = c7.multiselect("Analista", opts_analista, default=opts_analista, key="det_analista")
 
     if isinstance(f_data, tuple) and len(f_data) == 2:
         dini, dfim = f_data
@@ -1338,11 +1338,16 @@ if not fast_mode:
 
     if f_placa.strip():
         det = det[det["PLACA"].astype(str).str.contains(f_placa.strip(), case=False, na=False)]
-    if len(f_erros):    det = det[det["ERRO"].isin(f_erros)]
-    if len(f_grav):     det = det[det["GRAVIDADE"].isin(f_grav)]      if "GRAVIDADE"  in det.columns else det
-    if len(f_cidade):   det = det[det["UNIDADE"].isin(f_cidade)]      if "UNIDADE"    in det.columns else det
-    if len(f_vist):     det = det[det["VISTORIADOR"].isin(f_vist)]    if "VISTORIADOR" in det.columns else det
-    if len(f_analista): det = det[det["ANALISTA"].isin(f_analista)]   if "ANALISTA"   in det.columns else det
+    if len(f_erros):
+        det = det[det["ERRO"].isin(f_erros)]
+    if len(f_grav) and "GRAVIDADE" in det.columns:
+        det = det[det["GRAVIDADE"].isin(f_grav)]
+    if len(f_cidade) and "UNIDADE" in det.columns:
+        det = det[det["UNIDADE"].isin(f_cidade)]
+    if len(f_vist) and "VISTORIADOR" in det.columns:
+        det = det[det["VISTORIADOR"].isin(f_vist)]
+    if len(f_analista) and "ANALISTA" in det.columns:
+        det = det[det["ANALISTA"].isin(f_analista)]
 
     det_cols = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS"]
     for c in det_cols:
@@ -1439,6 +1444,7 @@ if not fast_mode:
         q = _slice_q(viewQ, di, dfim)
         p = _slice_p(viewP, di, dfim)
         meta_list.append((prefix, di, dfim))
+        
         return _pct_week(q, p).add_prefix(prefix)
 
     sem_fins = []
@@ -1583,5 +1589,3 @@ else:
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo ERRO é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
-
-
