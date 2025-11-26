@@ -234,9 +234,11 @@ def read_quality_month(month_id: str) -> Tuple[pd.DataFrame, str]:
         elif cu in {"OBSERVAÇÃO","OBSERVACAO","OBS"}: rename_map[c] = "OBS"
         elif cu == "ANALISTA": rename_map[c] = "ANALISTA"
         elif cu in {"EMPRESA","MARCA"}: rename_map[c] = "EMPRESA"
+        elif cu in {"TEMPO DE CASA","TEMPO_DE_CASA","TEMPO CASA","TEMPOCASA"}:
+            rename_map[c] = "TEMPO_CASA"
     dq = dq.rename(columns=rename_map)
 
-    for need in ["DATA","PLACA","VISTORIADOR","UNIDADE","ERRO","GRAVIDADE","ANALISTA","EMPRESA"]:
+    for need in ["DATA","PLACA","VISTORIADOR","UNIDADE","ERRO","GRAVIDADE","ANALISTA","EMPRESA","TEMPO_CASA"]:
         if need not in dq.columns:
             dq[need] = ""
 
@@ -247,7 +249,7 @@ def read_quality_month(month_id: str) -> Tuple[pd.DataFrame, str]:
     else:
         dq["DATA_TS"] = pd.NaT
 
-    for c in ["VISTORIADOR","UNIDADE","ERRO","GRAVIDADE","ANALISTA","EMPRESA","PLACA"]:
+    for c in ["VISTORIADOR","UNIDADE","ERRO","GRAVIDADE","ANALISTA","EMPRESA","PLACA","TEMPO_CASA"]:
         dq[c] = dq[c].astype(str).map(_upper)
 
     dq = dq[(dq["VISTORIADOR"] != "") & (dq["ERRO"] != "")]
@@ -366,7 +368,7 @@ if show_tech:
     if er_q:
         with st.expander("Falhas (Qualidade)"):
             for sid, e in er_q: st.write(sid); st.exception(e)
-    if ok_p: st.success("Produção conectada em:\n\n- " + "\n- ".join(ok_p))
+    if ok_p: st.success("Produção conectado em:\n\n- " + "\n- ".join(ok_p))
     if er_p:
         with st.expander("Falhas (Produção)"):
             for sid, e in er_p: st.write(sid); st.exception(e)
@@ -378,7 +380,7 @@ dfQ = pd.concat(dq_all, ignore_index=True)
 dfP = pd.concat(dp_all, ignore_index=True) if dp_all else pd.DataFrame(columns=["VISTORIADOR","__DATA__","IS_REV","UNIDADE"])
 dfMetas = pd.concat(metas_all, ignore_index=True) if metas_all else pd.DataFrame(columns=["VISTORIADOR","UNIDADE","META_MENSAL","DIAS_UTEIS","YM"])
 
-# Normaliza TEMPO_CASA (NOVATO / VETERANO) caso exista na base
+# Normaliza TEMPO_CASA (NOVATO / VETERANO) — IGUAL STARCHECK
 if "TEMPO_CASA" in dfQ.columns:
     dfQ["TEMPO_CASA"] = dfQ["TEMPO_CASA"].astype(str).map(_upper)
 
@@ -424,7 +426,7 @@ with col2:
         f_unids = st.multiselect("Unidades (opcional)", unids, default=unids)
     with c22:
         f_vists = st.multiselect("Vistoriadores (opcional)", vist_opts)
-    # NOVO: filtro de tempo de casa no cabeçalho
+    # Filtro de tempo de casa no cabeçalho — IGUAL STARCHECK
     perfil_sel = st.radio(
         "Perfil (tempo de casa)",
         ["Todos", "Novatos", "Veteranos"],
@@ -927,7 +929,7 @@ else:
 if not fast_mode:
     ex1, ex2 = st.columns(2)
 
-    # ===== PARETO (corrigido: caso 1 categoria não usa slider) =====
+    # ===== PARETO =====
     with ex1:
         st.markdown('<div class="section">📈 Pareto de erros</div>', unsafe_allow_html=True)
 
@@ -1055,10 +1057,10 @@ if not fast_mode:
                 })
                 prod_city["liq"] = 0
 
-            denom_col_hm = "liq" if denom_mode.startswith("Líquida") else "vist"
+            denom_col = "liq" if denom_mode.startswith("Líquida") else "vist"
 
             hm = erros_city.merge(
-                prod_city[["UNIDADE", denom_col_hm]].rename(columns={denom_col_hm: "DEN"}),
+                prod_city[["UNIDADE", denom_col]].rename(columns={denom_col: "DEN"}),
                 on="UNIDADE",
                 how="left",
             )
@@ -1074,7 +1076,7 @@ if not fast_mode:
                     alt.Tooltip("GRAVIDADE:N", title="GRAVIDADE"),
                     alt.Tooltip("QTD:Q", format=".0f", title="Erros"),
                     alt.Tooltip("DEN:Q", format=".0f",
-                                title=f"Vistorias ({'líq.' if denom_col_hm=='liq' else 'brutas'})"),
+                                title=f"Vistorias ({'líq.' if denom_col=='liq' else 'brutas'})"),
                     alt.Tooltip("%_VIST_TXT:N", title="% sobre vistorias"),
                 ],
             )
@@ -1109,6 +1111,7 @@ with col_dir:
                  .mean()
                  .reset_index(name="%GG")
         )
+        # ordena do maior %GG para o menor
         ana = ana.sort_values("%GG", ascending=False)
         ana["%GG"] = (ana["%GG"] * 100).round(1)
 
@@ -1136,166 +1139,97 @@ st.markdown("---")
 st.markdown('<div class="section">📐 % de erro por vistoriador</div>', unsafe_allow_html=True)
 denom_mode = st.session_state.get("denom_mode_global", "Bruta (recomendado)")
 
-# ================== METAS POR CIDADE ==================
-# Meta padrão da marca (demais cidades)
-META_ERRO_DEFAULT    = 5.0   # meta geral de erro (total)
-META_ERRO_GG_DEFAULT = 2.0   # meta geral GG
+# Metas e tolerância
+META_ERRO     = 3.5
+META_ERRO_GG  = 1.5
+TOL_AMARELO   = 0.5
 
-# Metas específicas por cidade (normalizar sem acento)
-CITY_METAS = {
-    "BARRA DO CORDA":       (3.5, 1.5),
-    "CHAPADINHA":           (5.0, 2.0),
-    "SANTA INES":           (3.5, 1.5),
-    "SAO JOAO DOS PATOS":   (3.5, 1.5),
-    "SAO JOSE DE RIBAMAR":  (3.5, 1.5),
-}
-
-TOL_AMARELO = 0.5  # tolerância para ficar amarelo acima da meta
-
-
-def _city_meta(unid: str) -> Tuple[float, float]:
-    """Retorna (meta_erro, meta_erro_gg) de acordo com a UNIDADE."""
-    if unid is None:
-        return META_ERRO_DEFAULT, META_ERRO_GG_DEFAULT
-    key = _strip_accents(str(unid)).upper().strip()
-    return CITY_METAS.get(key, (META_ERRO_DEFAULT, META_ERRO_GG_DEFAULT))
-
-
-def _farol(pct, meta, tol: float = TOL_AMARELO) -> str:
-    """Retorna o ícone de farol (🟢, 🟡, 🔴) com base na meta informada."""
-    if pd.isna(pct):
-        return "—"
+def _farol(pct, meta, tol=TOL_AMARELO):
+    if pd.isna(pct): return "—"
     diff = pct - meta
-    if diff <= 0:
-        return "🟢"
-    if diff <= tol:
-        return "🟡"
+    if diff <= 0:      return "🟢"
+    if diff <= tol:    return "🟡"
     return "🔴"
-
 
 # ------------------ PRODUÇÃO COM FALLBACK ------------------
 fallback_note = None
 
-def _make_prod(df_prod: pd.DataFrame) -> pd.DataFrame:
-    """Agrupa produção por UNIDADE + VISTORIADOR e calcula vist, rev, liq."""
+def _make_prod(df_prod):
     if df_prod.empty:
-        return pd.DataFrame(columns=["UNIDADE", "VISTORIADOR", "vist", "rev", "liq"])
+        return pd.DataFrame(columns=["VISTORIADOR","vist","rev","liq"])
     out = (
-        df_prod.groupby(["UNIDADE", "VISTORIADOR"], dropna=False)
-               .agg(vist=("IS_REV", "size"), rev=("IS_REV", "sum"))
+        df_prod.groupby("VISTORIADOR", dropna=False)
+               .agg(vist=("IS_REV","size"), rev=("IS_REV","sum"))
                .reset_index()
     )
     out["liq"] = out["vist"] - out["rev"]
     return out
 
-
 prod = _make_prod(viewP)
 
-# Se não houver produção no recorte atual, tenta cair para o mês inteiro
 if prod["vist"].sum() == 0:
     if not dfP.empty:
         s_p_dates_all = pd.to_datetime(dfP["__DATA__"], errors="coerce").dt.date
-        mask_mes_all = s_p_dates_all.map(
-            lambda d: isinstance(d, date) and d.year == ref_year and d.month == ref_month
-        )
+        mask_mes_all = s_p_dates_all.map(lambda d: isinstance(d, date) and d.year == ref_year and d.month == ref_month)
         prod_month = dfP[mask_mes_all].copy()
-
-        # aplica UNIDADE do filtro principal, se existir
         if "UNIDADE" in prod_month.columns and len(f_unids):
-            prod_month = prod_month[
-                prod_month["UNIDADE"].isin([_upper(u) for u in f_unids])
-            ]
-
-        # aplica filtro de vistoriador, se existir
+            prod_month = prod_month[prod_month["UNIDADE"].isin([_upper(u) for u in f_unids])]
         if "VISTORIADOR" in prod_month.columns and len(f_vists):
-            prod_month = prod_month[
-                prod_month["VISTORIADOR"].isin([_upper(v) for v in f_vists])
-            ]
-
-        # aplica perfil
+            prod_month = prod_month[prod_month["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
         if set_vists_perfil is not None and "VISTORIADOR" in prod_month.columns:
-            prod_month = prod_month[
-                prod_month["VISTORIADOR"].isin(set_vists_perfil)
-            ]
-
+            prod_month = prod_month[prod_month["VISTORIADOR"].isin(set_vists_perfil)]
         prod = _make_prod(prod_month)
         if prod["vist"].sum() > 0:
-            fallback_note = "Sem dados de produção no recorte atual; usando produção do mês inteiro."
+            fallback_note = "Usando produção do mês (fallback), pois não houve produção no período selecionado."
 
-# Se ainda assim zerar, usa tudo que existe na produção
 if prod["vist"].sum() == 0 and not dfP.empty:
-    prod = _make_prod(dfP.copy())
-    if prod["vist"].sum() > 0:
-        fallback_note = "Sem dados de produção no mês selecionado; usando produção global disponível."
-
+    prod_all = dfP.copy()
+    if set_vists_perfil is not None and "VISTORIADOR" in prod_all.columns:
+        prod_all = prod_all[prod_all["VISTORIADOR"].isin(set_vists_perfil)]
+    prod = _make_prod(prod_all)
+    fallback_note = "Usando produção global (fallback), pois não há produção no mês/período selecionado."
 
 # ------------------ QUALIDADE ------------------
 qual = (
-    viewQ.groupby(["UNIDADE", "VISTORIADOR"], dropna=False)
-         .agg(
-             erros=("ERRO", "size"),
-             erros_gg=("GRAVIDADE", lambda s: s.isin(grav_gg).sum())
-         )
+    viewQ.groupby("VISTORIADOR", dropna=False)
+         .agg(erros=("ERRO","size"),
+              erros_gg=("GRAVIDADE", lambda s: s.isin(grav_gg).sum()))
          .reset_index()
 )
 
 # ------------------ BASE FINAL ------------------
-base = prod.merge(qual, on=["UNIDADE", "VISTORIADOR"], how="outer").fillna(0)
+base = prod.merge(qual, on="VISTORIADOR", how="outer").fillna(0)
+den = base["liq"] if denom_mode.startswith("Líquida") else base["vist"]
+den = den.replace({0: np.nan})
 
-# Denominador: Bruta (vist) ou Líquida (liq)
-den_col = "liq" if denom_mode.startswith("Líquida") else "vist"
-den = base[den_col].replace({0: np.nan}).astype(float)
-
-# Metas por unidade
-metas_df = base["UNIDADE"].apply(lambda u: pd.Series(_city_meta(u)))
-metas_df.columns = ["meta_erro", "meta_erro_gg"]
-base[["meta_erro", "meta_erro_gg"]] = metas_df
-
-# %Erro
-base["%ERRO"]    = (base["erros"]    / den * 100.0)
-base["%ERRO_GG"] = (base["erros_gg"] / den * 100.0)
-
-# Farol comparando com meta da unidade
-base["FAROL_%ERRO"]    = base.apply(lambda r: _farol(r["%ERRO"],    r["meta_erro"]),    axis=1)
-base["FAROL_%ERRO_GG"] = base.apply(lambda r: _farol(r["%ERRO_GG"], r["meta_erro_gg"]), axis=1)
-
-# Arredondamento
-base["%ERRO"]     = base["%ERRO"].round(1)
-base["%ERRO_GG"]  = base["%ERRO_GG"].round(1)
-base["meta_erro"] = base["meta_erro"].round(1)
-base["meta_erro_gg"] = base["meta_erro_gg"].round(1)
+base["%ERRO"]    = ((base["erros"]    / den) * 100).round(1)
+base["%ERRO_GG"] = ((base["erros_gg"] / den) * 100).round(1)
+base["FAROL_%ERRO"]    = base["%ERRO"].apply(lambda v: _farol(v, META_ERRO))
+base["FAROL_%ERRO_GG"] = base["%ERRO_GG"].apply(lambda v: _farol(v, META_ERRO_GG))
 
 # ------------------ FORMATAÇÃO E ORDENAÇÃO ------------------
 fmt = base.copy()
-for c in ["vist", "rev", "liq", "erros", "erros_gg"]:
+for c in ["vist","rev","liq","erros","erros_gg"]:
     fmt[c] = pd.to_numeric(fmt[c], errors="coerce").fillna(0).astype(int)
 
 def _fmt_val_pct(pct, emoji):
-    if pd.isna(pct):
+    if pd.isna(pct): 
         return "—"
     return f"{emoji} {pct:.1f}%".replace(".", ",")
 
-fmt["%ERRO"]    = fmt.apply(lambda r: _fmt_val_pct(r["%ERRO"],    r["FAROL_%ERRO"]),    axis=1)
+fmt["%ERRO"]    = fmt.apply(lambda r: _fmt_val_pct(r["%ERRO"],    r["FAROL_%ERRO"]), axis=1)
 fmt["%ERRO_GG"] = fmt.apply(lambda r: _fmt_val_pct(r["%ERRO_GG"], r["FAROL_%ERRO_GG"]), axis=1)
 
-# Ordenação decrescente pelo valor numérico real (%ERRO) usando base
-fmt_sorted = fmt.sort_values(
-    by="%ERRO",
-    key=lambda col: base.loc[col.index, "%ERRO"],
-    ascending=False
-)
+# Ordenação decrescente pelo valor numérico real (%ERRO)
+fmt_sorted = fmt.sort_values(by="%ERRO", key=lambda col: base.loc[col.index, "%ERRO"], ascending=False)
 
-cols_view = ["UNIDADE", "VISTORIADOR", "vist", "rev", "liq", "erros", "erros_gg", "%ERRO", "%ERRO_GG"]
+cols_view = ["VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
 
 st.dataframe(
     fmt_sorted[cols_view],
     use_container_width=True,
     hide_index=True,
 )
-
-if fallback_note:
-    st.caption(f"ℹ️ {fallback_note}")
-
 # ------------------ EXPORTAR EXCEL COM FAROL DE CORES ------------------
 try:
     from openpyxl import Workbook
@@ -1311,14 +1245,13 @@ else:
     ws = wb.active
     ws.title = "Erros por Vistoriador"
 
-    # Cabeçalho (inclui UNIDADE)
-    headers = ["UNIDADE", "VISTORIADOR", "vist", "rev", "liq", "erros", "erros_gg", "%ERRO", "%ERRO_GG"]
+    # Cabeçalho
+    headers = ["VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
     ws.append(headers)
 
     # Linhas (usamos o DataFrame já ordenado e com farol calculado)
     for _, r in fmt_sorted.iterrows():
         ws.append([
-            r["UNIDADE"],
             r["VISTORIADOR"],
             int(r["vist"]), int(r["rev"]), int(r["liq"]),
             int(r["erros"]), int(r["erros_gg"]),
@@ -1335,18 +1268,18 @@ else:
             return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
         return PatternFill(fill_type=None)
 
-    # Aplicar cores nas colunas %ERRO (H) e %ERRO_GG (I)
+    # Aplicar cores nas colunas %ERRO (G) e %ERRO_GG (H)
     for i, (_, r) in enumerate(fmt_sorted.iterrows(), start=2):
         fill_total = _fill_from_farol(r.get("FAROL_%ERRO"))
         fill_gg    = _fill_from_farol(r.get("FAROL_%ERRO_GG"))
 
-        ws[f"H{i}"].fill = fill_total
-        ws[f"I{i}"].fill = fill_gg
+        ws[f"G{i}"].fill = fill_total
+        ws[f"H{i}"].fill = fill_gg
 
+        ws[f"G{i}"].alignment = Alignment(horizontal="center")
         ws[f"H{i}"].alignment = Alignment(horizontal="center")
-        ws[f"I{i}"].alignment = Alignment(horizontal="center")
 
-    widths = {"A":18, "B":28, "C":10, "D":10, "E":10, "F":10, "G":10, "H":12, "I":12}
+    widths = {"A":28, "B":10, "C":10, "D":10, "E":10, "F":10, "G":12, "H":12}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
@@ -1357,17 +1290,19 @@ else:
     st.download_button(
         label="📥 Baixar Excel com farol de cores",
         data=xbuf,
-        file_name="erros_por_vistoriador.xlsx",
+        file_name="erros_por_vistoriador_tokyo.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 # ------------------ LEGENDA ------------------
 with st.expander("Legenda do farol", expanded=False):
-    st.write("🟢 Dentro da meta definida para a unidade (erro total e GG).")
-    st.write(f"🟡 Até {TOL_AMARELO:.1f} ponto percentual acima da meta da unidade.")
-    st.write("🔴 Acima da meta da unidade + tolerância.")
-    st.write("As metas de %Erro variam por cidade conforme parametrização interna da Tokyo (CITY_METAS).")
+    st.write(f"🟢 Dentro da meta · %ERRO ≤ {META_ERRO:.1f}% · %ERRO_GG ≤ {META_ERRO_GG:.1f}%")
+    st.write(f"🟡 Até {TOL_AMARELO:.1f} pp acima da meta")
+    st.write("🔴 Acima da meta + tolerância")
 
+if fallback_note:
+    st.caption(f"ℹ️ {fallback_note}")
+    
 # ------------------ TENDÊNCIA DE ERROS (projeção) ------------------
 st.markdown("---")
 st.markdown('<div class="section">📈 Tendência de erros (projeção até o fim do mês)</div>', unsafe_allow_html=True)
@@ -1417,7 +1352,7 @@ if not fast_mode:
     det = viewQ.copy()
     with st.expander("Filtros deste quadro (opcional)", expanded=False):
         c1, c2, c3 = st.columns(3)
-        c4, c5, c6, c7 = st.columns(4)
+        c4, c5, c6 = st.columns(3)
 
         _d = pd.to_datetime(det["DATA"], errors="coerce").dt.date
         _dmin, _dmax = (_d.min(), _d.max()) if _d.notna().any() else (date(2000,1,1), date(2000,1,1))
@@ -1435,7 +1370,7 @@ if not fast_mode:
         f_grav        = c4.multiselect("Gravidade", opts_grav, default=opts_grav)
         f_cidade      = c5.multiselect("Cidade / Unidade", opts_cidade, default=opts_cidade)
         f_vist        = c6.multiselect("Vistoriador", opts_vist, default=opts_vist)
-        f_analista    = c7.multiselect("Analista", opts_analista, default=opts_analista, key="det_analista")
+        f_analista    = c6.multiselect("Analista", opts_analista, default=opts_analista, key="det_analista")
 
     if isinstance(f_data, tuple) and len(f_data) == 2:
         dini, dfim = f_data
@@ -1444,18 +1379,13 @@ if not fast_mode:
 
     if f_placa.strip():
         det = det[det["PLACA"].astype(str).str.contains(f_placa.strip(), case=False, na=False)]
-    if len(f_erros):
-        det = det[det["ERRO"].isin(f_erros)]
-    if len(f_grav) and "GRAVIDADE" in det.columns:
-        det = det[det["GRAVIDADE"].isin(f_grav)]
-    if len(f_cidade) and "UNIDADE" in det.columns:
-        det = det[det["UNIDADE"].isin(f_cidade)]
-    if len(f_vist) and "VISTORIADOR" in det.columns:
-        det = det[det["VISTORIADOR"].isin(f_vist)]
-    if len(f_analista) and "ANALISTA" in det.columns:
-        det = det[det["ANALISTA"].isin(f_analista)]
+    if len(f_erros):    det = det[det["ERRO"].isin(f_erros)]
+    if len(f_grav):     det = det[det["GRAVIDADE"].isin(f_grav)]      if "GRAVIDADE"  in det.columns else det
+    if len(f_cidade):   det = det[det["UNIDADE"].isin(f_cidade)]      if "UNIDADE"    in det.columns else det
+    if len(f_vist):     det = det[det["VISTORIADOR"].isin(f_vist)]    if "VISTORIADOR" in det.columns else det
+    if len(f_analista): det = det[det["ANALISTA"].isin(f_analista)]   if "ANALISTA"   in det.columns else det
 
-    det_cols = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS"]
+    det_cols = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS","TEMPO_CASA"]
     for c in det_cols:
         if c not in det.columns: det[c] = ""
     det = det[det_cols].sort_values(["DATA","UNIDADE","VISTORIADOR"])
@@ -1514,35 +1444,35 @@ if not fast_mode:
 
     def _pct_week(qdf, pdf):
         """ERROS por vist. + %ERRO (bruta ou líquida) para uma janela semanal."""
-        grav_gg_loc = {"GRAVE", "GRAVISSIMO", "GRAVÍSSIMO"}
+        grav_gg = {"GRAVE", "GRAVISSIMO", "GRAVÍSSIMO"}
 
         if qdf.empty:
-            qual_loc = pd.DataFrame(columns=["VISTORIADOR","ERROS","ERROS_GG"])
+            qual = pd.DataFrame(columns=["VISTORIADOR","ERROS","ERROS_GG"])
         else:
-            qual_loc = (qdf.groupby("VISTORIADOR", dropna=False)
-                        .agg(ERROS=("ERRO","size"),
-                             ERROS_GG=("GRAVIDADE", lambda s: s.isin(grav_gg_loc).sum()))
-                        .reset_index())
+            qual = (qdf.groupby("VISTORIADOR", dropna=False)
+                    .agg(ERROS=("ERRO","size"),
+                         ERROS_GG=("GRAVIDADE", lambda s: s.isin(grav_gg).sum()))
+                    .reset_index())
 
         if pdf.empty:
-            prod_loc = pd.DataFrame(columns=["VISTORIADOR","vist","rev","liq"])
+            prod = pd.DataFrame(columns=["VISTORIADOR","vist","rev","liq"])
         else:
-            prod_loc = (pdf.groupby("VISTORIADOR", dropna=False)
-                        .agg(vist=("IS_REV","size"), rev=("IS_REV","sum"))
-                        .reset_index())
-            prod_loc["liq"] = prod_loc["vist"] - prod_loc["rev"]
+            prod = (pdf.groupby("VISTORIADOR", dropna=False)
+                    .agg(vist=("IS_REV","size"), rev=("IS_REV","sum"))
+                    .reset_index())
+            prod["liq"] = prod["vist"] - prod["rev"]
 
-        den_col_loc = "liq" if denom_mode.startswith("Líquida") else "vist"
-        out = prod_loc.merge(qual_loc, on="VISTORIADOR", how="outer").fillna(0)
+        den_col = "liq" if denom_mode.startswith("Líquida") else "vist"
+        out = prod.merge(qual, on="VISTORIADOR", how="outer").fillna(0)
 
         for c in ["vist","rev","liq","ERROS","ERROS_GG"]:
             if c in out.columns:
                 out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
 
-        den_loc = out[den_col_loc].replace({0: np.nan}).astype(float)
-        out["%ERRO"]    = (out["ERROS"]    / den_loc * 100).round(1)
-        out["%ERRO_GG"] = (out["ERROS_GG"] / den_loc * 100).round(1)
-        out["DEN"] = out[den_col_loc].fillna(0).astype(int)
+        den = out[den_col].replace({0: np.nan}).astype(float)
+        out["%ERRO"]    = (out["ERROS"]    / den * 100).round(1)
+        out["%ERRO_GG"] = (out["ERROS_GG"] / den * 100).round(1)
+        out["DEN"] = out[den_col].fillna(0).astype(int)
 
         return out[["VISTORIADOR","ERROS","%ERRO","ERROS_GG","%ERRO_GG","DEN"]]
 
@@ -1550,7 +1480,6 @@ if not fast_mode:
         q = _slice_q(viewQ, di, dfim)
         p = _slice_p(viewP, di, dfim)
         meta_list.append((prefix, di, dfim))
-        
         return _pct_week(q, p).add_prefix(prefix)
 
     sem_fins = []
@@ -1571,13 +1500,13 @@ if not fast_mode:
         sem_fins = list(reversed(sem_fins))
         k = len(sem_fins)
 
-        from functools import reduce
         meta = []
         blocks = []
         for i, (di, dfim) in enumerate(sem_fins, start=1):
             blocks.append(_make_week_block(di, dfim, f"S{i}_", meta))
 
-        tab_w = reduce(
+        from functools import reduce
+        tab = reduce(
             lambda L, R: L.merge(R, left_on=f"{L.columns[0]}", right_on=f"{R.columns[0]}", how="outer"),
             blocks
         )
@@ -1588,11 +1517,11 @@ if not fast_mode:
                 if isinstance(v, str) and v.strip():
                     return v
             return ""
-        tab_w["VISTORIADOR"] = tab_w.apply(_pick_row, axis=1)
+        tab["VISTORIADOR"] = tab.apply(_pick_row, axis=1)
 
-        for c in tab_w.columns:
+        for c in tab.columns:
             if c.endswith("ERROS") or c.endswith("ERROS_GG") or c.endswith("DEN"):
-                tab_w[c] = pd.to_numeric(tab_w[c], errors="coerce").fillna(0).astype(int)
+                tab[c] = pd.to_numeric(tab[c], errors="coerce").fillna(0).astype(int)
 
         def _status_pp(delta):
             if pd.isna(delta): return "—"
@@ -1602,8 +1531,8 @@ if not fast_mode:
 
         for i in range(1, k):
             dcol = f"Δ_%ERRO_S{i}_S{i+1}"
-            tab_w[dcol] = (tab_w[f"S{i+1}_%ERRO"] - tab_w[f"S{i}_%ERRO"]).round(1)
-            tab_w[f"Status (S{i}→S{i+1})"] = tab_w[dcol].map(_status_pp)
+            tab[dcol] = (tab[f"S{i+1}_%ERRO"] - tab[f"S{i}_%ERRO"]).round(1)
+            tab[f"Status (S{i}→S{i+1})"] = tab[dcol].map(_status_pp)
 
         def _status3(p1, p2, p3):
             if any(pd.isna([p1, p2, p3])): return "—"
@@ -1615,34 +1544,34 @@ if not fast_mode:
             return "Sem alteração (↔↔)"
 
         if k >= 3:
-            tab_w["Status (3-semanas)"] = [
+            tab["Status (3-semanas)"] = [
                 _status3(r.get(f"S{k-2}_%ERRO", np.nan), r.get(f"S{k-1}_%ERRO", np.nan), r.get(f"S{k}_%ERRO", np.nan))
-                for _, r in tab_w.iterrows()
+                for _, r in tab.iterrows()
             ]
 
-        def _fmt_pct_w(x): return "—" if pd.isna(x) else f"{x:.1f}%".replace(".", ",")
-        def _fmt_pp_w(x):  return "—" if pd.isna(x) else f"{x:.1f} pp".replace(".", ",")
+        def _fmt_pct(x): return "—" if pd.isna(x) else f"{x:.1f}%".replace(".", ",")
+        def _fmt_pp(x):  return "—" if pd.isna(x) else f"{x:.1f} pp".replace(".", ",")
 
-        cols_w = ["VISTORIADOR"]
+        cols = ["VISTORIADOR"]
         for i in range(1, k+1):
-            cols_w += [f"S{i}_ERROS", f"S{i}_%ERRO", f"S{i}_ERROS_GG", f"S{i}_%ERRO_GG"]
+            cols += [f"S{i}_ERROS", f"S{i}_%ERRO", f"S{i}_ERROS_GG", f"S{i}_%ERRO_GG"]
 
         for i in range(1, k):
-            cols_w += [f"Δ_%ERRO_S{i}_S{i+1}", f"Status (S{i}→S{i+1})"]
+            cols += [f"Δ_%ERRO_S{i}_S{i+1}", f"Status (S{i}→S{i+1})"]
 
         if k >= 3:
-            cols_w += ["Status (3-semanas)"]
+            cols += ["Status (3-semanas)"]
 
-        out_w = tab_w[cols_w].copy()
+        out = tab[cols].copy()
 
-        for c in out_w.columns:
+        for c in out.columns:
             if c.endswith("%ERRO") or c.endswith("%ERRO_GG"):
-                out_w[c] = out_w[c].map(_fmt_pct_w)
+                out[c] = out[c].map(_fmt_pct)
             elif c.startswith("Δ_%ERRO_"):
-                out_w[c] = out_w[c].map(_fmt_pp_w)
+                out[c] = out[c].map(_fmt_pp)
 
-        order_key = tab_w[f"S{k}_%ERRO"].fillna(-1).values
-        out_w = out_w.iloc[np.argsort(-order_key)]
+        order_key = tab[f"S{k}_%ERRO"].fillna(-1).values
+        out = out.iloc[np.argsort(-order_key)]
 
         legend_parts = []
         for i, (prefix, di, dfim) in enumerate(meta, start=1):
@@ -1652,16 +1581,16 @@ if not fast_mode:
             legend_parts.append(label)
         st.caption("  ·  ".join(legend_parts))
 
-        st.dataframe(out_w.reset_index(drop=True), use_container_width=True, hide_index=True)
+        st.dataframe(out.reset_index(drop=True), use_container_width=True, hide_index=True)
 
 # ------------------ RANKINGS ------------------
 st.markdown("---")
 st.markdown('<div class="section">🏁 Top 5 melhores × piores (por % de erro)</div>', unsafe_allow_html=True)
 
-# usa a base já calculada acima (com metas por cidade)
-rank = base.copy()
-rank = rank[rank[den_col] > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
+rank = (base.copy())
+rank = rank[den > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
 
+den_col = "liq" if denom_mode.startswith("Líquida") else "vist"
 col_titulo_den = "vistorias líquidas" if den_col == "liq" else "vistorias"
 cols_rank = ["VISTORIADOR", den_col, "erros", "%ERRO", "%ERRO_GG"]
 rank_view = rank[cols_rank].rename(columns={den_col: col_titulo_den})
@@ -1689,7 +1618,7 @@ df_fraude = viewQ[fraude_mask].copy()
 if df_fraude.empty:
     st.info("Nenhum registro de Tentativa de Fraude no período/filtros selecionados.")
 else:
-    cols_fraude = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS"]
+    cols_fraude = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS","TEMPO_CASA"]
     for c in cols_fraude:
         if c not in df_fraude.columns: df_fraude[c] = ""
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
