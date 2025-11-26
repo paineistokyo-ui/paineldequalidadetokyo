@@ -11,7 +11,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-
+3
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from dateutil.relativedelta import relativedelta
@@ -1137,29 +1137,38 @@ if not dow_df.empty:
 # ------------------ % ERRO (casamento com Produção) ------------------
 st.markdown("---")
 st.markdown('<div class="section">📐 % de erro por vistoriador</div>', unsafe_allow_html=True)
+
 denom_mode = st.session_state.get("denom_mode_global", "Bruta (recomendado)")
 
-# Metas e tolerância
-META_ERRO     = 3.5
-META_ERRO_GG  = 1.5
-TOL_AMARELO   = 0.5
+# ============= METAS POR CIDADE – TOKYO =============
+def _norm_city(x: str) -> str:
+    return _strip_accents(_upper(x))
 
-def _farol(pct, meta, tol=TOL_AMARELO):
-    if pd.isna(pct): return "—"
-    diff = pct - meta
-    if diff <= 0:      return "🟢"
-    if diff <= tol:    return "🟡"
-    return "🔴"
+CITY_METAS = {
+    _norm_city("BARRA DO CORDA"):        (3.5, 1.5),
+    _norm_city("CHAPADINHA"):            (5.0, 2.0),
+    _norm_city("SANTA INÊS"):            (3.5, 1.5),
+    _norm_city("SÃO JOÃO DOS PATOS"):    (3.5, 1.5),
+    _norm_city("SÃO JOSÉ DE RIBAMAR"):   (3.5, 1.5),
+}
+
+def _metas_cidade(cidade: str) -> tuple[float, float]:
+    """Retorna (meta_erro_total, meta_erro_gg) para a cidade.
+       Default: (3.5, 1.5) se não estiver no mapa."""
+    return CITY_METAS.get(_norm_city(cidade), (3.5, 1.5))
+
+TOL_AMARELO = 0.5  # tolerância em pontos percentuais
 
 # ------------------ PRODUÇÃO COM FALLBACK ------------------
 fallback_note = None
 
 def _make_prod(df_prod):
     if df_prod.empty:
-        return pd.DataFrame(columns=["VISTORIADOR","vist","rev","liq"])
+        return pd.DataFrame(columns=["VISTORIADOR", "vist", "rev", "liq"])
     out = (
         df_prod.groupby("VISTORIADOR", dropna=False)
-               .agg(vist=("IS_REV","size"), rev=("IS_REV","sum"))
+               .agg(vist=("IS_REV", "size"),
+                    rev=("IS_REV", "sum"))
                .reset_index()
     )
     out["liq"] = out["vist"] - out["rev"]
@@ -1170,7 +1179,9 @@ prod = _make_prod(viewP)
 if prod["vist"].sum() == 0:
     if not dfP.empty:
         s_p_dates_all = pd.to_datetime(dfP["__DATA__"], errors="coerce").dt.date
-        mask_mes_all = s_p_dates_all.map(lambda d: isinstance(d, date) and d.year == ref_year and d.month == ref_month)
+        mask_mes_all = s_p_dates_all.map(
+            lambda d: isinstance(d, date) and d.year == ref_year and d.month == ref_month
+        )
         prod_month = dfP[mask_mes_all].copy()
         if "UNIDADE" in prod_month.columns and len(f_unids):
             prod_month = prod_month[prod_month["UNIDADE"].isin([_upper(u) for u in f_unids])]
@@ -1192,28 +1203,71 @@ if prod["vist"].sum() == 0 and not dfP.empty:
 # ------------------ QUALIDADE ------------------
 qual = (
     viewQ.groupby("VISTORIADOR", dropna=False)
-         .agg(erros=("ERRO","size"),
+         .agg(erros=("ERRO", "size"),
               erros_gg=("GRAVIDADE", lambda s: s.isin(grav_gg).sum()))
          .reset_index()
 )
 
+# ------------------ CIDADE POR VISTORIADOR ------------------
+# Usa UNIDADE da produção; se não tiver, cai para UNIDADE da qualidade
+city_map = {}
+
+if "UNIDADE" in viewP.columns and not viewP.empty:
+    tmp = (
+        viewP.groupby("VISTORIADOR")["UNIDADE"]
+             .agg(lambda s: s.mode().iloc[0] if not s.mode().empty
+                  else (s.dropna().iloc[0] if s.dropna().any() else ""))
+    )
+    city_map.update(tmp.to_dict())
+
+if "UNIDADE" in viewQ.columns:
+    tmp_q = (
+        viewQ.groupby("VISTORIADOR")["UNIDADE"]
+             .agg(lambda s: s.mode().iloc[0] if not s.mode().empty
+                  else (s.dropna().iloc[0] if s.dropna().any() else ""))
+    )
+    for k, v in tmp_q.to_dict().items():
+        city_map.setdefault(k, v)
+
 # ------------------ BASE FINAL ------------------
 base = prod.merge(qual, on="VISTORIADOR", how="outer").fillna(0)
+base["CIDADE"] = base["VISTORIADOR"].map(city_map).fillna("")
+
 den = base["liq"] if denom_mode.startswith("Líquida") else base["vist"]
 den = den.replace({0: np.nan})
 
 base["%ERRO"]    = ((base["erros"]    / den) * 100).round(1)
 base["%ERRO_GG"] = ((base["erros_gg"] / den) * 100).round(1)
-base["FAROL_%ERRO"]    = base["%ERRO"].apply(lambda v: _farol(v, META_ERRO))
-base["FAROL_%ERRO_GG"] = base["%ERRO_GG"].apply(lambda v: _farol(v, META_ERRO_GG))
+
+def _farol_pct(pct, cidade, meta_total, meta_gg, is_gg=False, tol=TOL_AMARELO):
+    if pd.isna(pct):
+        return "—"
+    meta = meta_gg if is_gg else meta_total
+    diff = pct - meta
+    if diff <= 0:
+        return "🟢"
+    if diff <= tol:
+        return "🟡"
+    return "🔴"
+
+# aplica farol usando meta da CIDADE
+farol_total = []
+farol_gg    = []
+for _, r in base.iterrows():
+    mt_total, mt_gg = _metas_cidade(r.get("CIDADE", ""))
+    farol_total.append(_farol_pct(r["%ERRO"],    r.get("CIDADE", ""), mt_total, mt_gg, is_gg=False))
+    farol_gg.append(   _farol_pct(r["%ERRO_GG"], r.get("CIDADE", ""), mt_total, mt_gg, is_gg=True))
+
+base["FAROL_%ERRO"]    = farol_total
+base["FAROL_%ERRO_GG"] = farol_gg
 
 # ------------------ FORMATAÇÃO E ORDENAÇÃO ------------------
 fmt = base.copy()
-for c in ["vist","rev","liq","erros","erros_gg"]:
+for c in ["vist", "rev", "liq", "erros", "erros_gg"]:
     fmt[c] = pd.to_numeric(fmt[c], errors="coerce").fillna(0).astype(int)
 
 def _fmt_val_pct(pct, emoji):
-    if pd.isna(pct): 
+    if pd.isna(pct):
         return "—"
     return f"{emoji} {pct:.1f}%".replace(".", ",")
 
@@ -1221,15 +1275,20 @@ fmt["%ERRO"]    = fmt.apply(lambda r: _fmt_val_pct(r["%ERRO"],    r["FAROL_%ERRO
 fmt["%ERRO_GG"] = fmt.apply(lambda r: _fmt_val_pct(r["%ERRO_GG"], r["FAROL_%ERRO_GG"]), axis=1)
 
 # Ordenação decrescente pelo valor numérico real (%ERRO)
-fmt_sorted = fmt.sort_values(by="%ERRO", key=lambda col: base.loc[col.index, "%ERRO"], ascending=False)
+fmt_sorted = fmt.sort_values(
+    by="%ERRO",
+    key=lambda col: base.loc[col.index, "%ERRO"],
+    ascending=False
+)
 
-cols_view = ["VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
+cols_view = ["CIDADE", "VISTORIADOR", "vist", "rev", "liq", "erros", "erros_gg", "%ERRO", "%ERRO_GG"]
 
 st.dataframe(
     fmt_sorted[cols_view],
     use_container_width=True,
     hide_index=True,
 )
+
 # ------------------ EXPORTAR EXCEL COM FAROL DE CORES ------------------
 try:
     from openpyxl import Workbook
@@ -1245,20 +1304,20 @@ else:
     ws = wb.active
     ws.title = "Erros por Vistoriador"
 
-    # Cabeçalho
-    headers = ["VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
+    # Cabeçalho (com CIDADE)
+    headers = ["CIDADE", "VISTORIADOR", "vist", "rev", "liq", "erros", "erros_gg", "%ERRO", "%ERRO_GG"]
     ws.append(headers)
 
-    # Linhas (usamos o DataFrame já ordenado e com farol calculado)
+    # Linhas
     for _, r in fmt_sorted.iterrows():
         ws.append([
+            r.get("CIDADE", ""),
             r["VISTORIADOR"],
             int(r["vist"]), int(r["rev"]), int(r["liq"]),
             int(r["erros"]), int(r["erros_gg"]),
-            r["%ERRO"], r["%ERRO_GG"]
+            r["%ERRO"], r["%ERRO_GG"],
         ])
 
-    # Função para pintar células conforme o farol
     def _fill_from_farol(emoji: str) -> PatternFill:
         if isinstance(emoji, str) and "🟢" in emoji:
             return PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
@@ -1268,18 +1327,18 @@ else:
             return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
         return PatternFill(fill_type=None)
 
-    # Aplicar cores nas colunas %ERRO (G) e %ERRO_GG (H)
+    # Aplicar cores nas colunas %ERRO (H) e %ERRO_GG (I)
     for i, (_, r) in enumerate(fmt_sorted.iterrows(), start=2):
         fill_total = _fill_from_farol(r.get("FAROL_%ERRO"))
         fill_gg    = _fill_from_farol(r.get("FAROL_%ERRO_GG"))
 
-        ws[f"G{i}"].fill = fill_total
-        ws[f"H{i}"].fill = fill_gg
+        ws[f"H{i}"].fill = fill_total
+        ws[f"I{i}"].fill = fill_gg
 
-        ws[f"G{i}"].alignment = Alignment(horizontal="center")
         ws[f"H{i}"].alignment = Alignment(horizontal="center")
+        ws[f"I{i}"].alignment = Alignment(horizontal="center")
 
-    widths = {"A":28, "B":10, "C":10, "D":10, "E":10, "F":10, "G":12, "H":12}
+    widths = {"A":18, "B":28, "C":10, "D":10, "E":10, "F":10, "G":10, "H":14, "I":14}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
@@ -1296,10 +1355,9 @@ else:
 
 # ------------------ LEGENDA ------------------
 with st.expander("Legenda do farol", expanded=False):
-    st.write(f"🟢 Dentro da meta · %ERRO ≤ {META_ERRO:.1f}% · %ERRO_GG ≤ {META_ERRO_GG:.1f}%")
+    st.write("🟢 Dentro da meta de qualidade da cidade")
     st.write(f"🟡 Até {TOL_AMARELO:.1f} pp acima da meta")
     st.write("🔴 Acima da meta + tolerância")
-
 if fallback_note:
     st.caption(f"ℹ️ {fallback_note}")
     
