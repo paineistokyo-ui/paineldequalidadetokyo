@@ -164,6 +164,30 @@ def business_days_count(dini: date, dfim: date) -> int:
     return len(pd.bdate_range(dini, dfim))
 
 
+# ------------------ PERFIL NOVATO / VETERANO ------------------
+# Preencha este dicionário com os vistoriadores da TOKYO
+# Exemplo:
+# "NOME DO VISTORIADOR": "NOVATO",
+# "OUTRO NOME": "VETERANO",
+PERFIL_VISTORIADOR = {
+    # "JOAO SILVA": "NOVATO",
+    # "MARIA SOUZA": "VETERANO",
+}
+
+def _perfil_vistoriador(nome: str) -> str:
+    """
+    Retorna 'NOVATO' ou 'VETERANO' para o vistoriador.
+    Padrão: VETERANO se não estiver no dicionário.
+    """
+    if not isinstance(nome, str):
+        return "VETERANO"
+    nome_u = _upper(nome)
+    cat = PERFIL_VISTORIADOR.get(nome_u, "").upper()
+    if cat in {"NOVATO", "VETERANO"}:
+        return cat
+    return "VETERANO"
+
+
 # ------------------ LEITURA DOS ÍNDICES (com cache) ------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def read_index(sheet_id: str, tab: str = "ARQUIVOS") -> pd.DataFrame:
@@ -366,7 +390,7 @@ if show_tech:
     if er_q:
         with st.expander("Falhas (Qualidade)"):
             for sid, e in er_q: st.write(sid); st.exception(e)
-    if ok_p: st.success("Produção conectada em:\n\n- " + "\n- ".join(ok_p))
+    if ok_p: st.success("Produção conectado em:\n\n- " + "\n- ".join(ok_p))
     if er_p:
         with st.expander("Falhas (Produção)"):
             for sid, e in er_p: st.write(sid); st.exception(e)
@@ -446,6 +470,21 @@ if not dfP.empty:
 else:
     viewP = dfP.copy()
 
+# -------- Filtro NOVATO / VETERANO --------
+perfil_opts = ["Todos", "Novato", "Veterano"]
+perfil_sel = st.radio("Perfil do vistoriador", perfil_opts, horizontal=True, index=0)
+perfil_target = perfil_sel.upper()
+
+if perfil_sel != "Todos":
+    if "VISTORIADOR" in viewQ.columns:
+        viewQ = viewQ[viewQ["VISTORIADOR"].map(_perfil_vistoriador) == perfil_target]
+    if not viewP.empty and "VISTORIADOR" in viewP.columns:
+        viewP = viewP[viewP["VISTORIADOR"].map(_perfil_vistoriador) == perfil_target]
+
+if viewQ.empty:
+    st.info("Sem registros de Qualidade no período/filtros (após perfil Novato/Veterano).")
+    st.stop()
+
 
 # ------------------ KPIs ------------------
 grav_gg = {"GRAVE", "GRAVISSIMO", "GRAVÍSSIMO"}
@@ -483,6 +522,10 @@ if "UNIDADE" in prev_base_cards.columns and len(f_unids):
     prev_base_cards = prev_base_cards[prev_base_cards["UNIDADE"].isin([_upper(u) for u in f_unids])]
 if "VISTORIADOR" in prev_base_cards.columns and len(f_vists):
     prev_base_cards = prev_base_cards[prev_base_cards["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+if perfil_sel != "Todos" and "VISTORIADOR" in prev_base_cards.columns:
+    prev_base_cards = prev_base_cards[
+        prev_base_cards["VISTORIADOR"].map(_perfil_vistoriador) == perfil_target
+    ]
 
 prev_total = int(len(prev_base_cards))
 prev_gg = int(prev_base_cards["GRAVIDADE"].isin(grav_gg).sum()) if "GRAVIDADE" in prev_base_cards.columns else 0
@@ -520,6 +563,8 @@ if "UNIDADE" in mtd_all.columns and len(f_unids):
     mtd_all = mtd_all[mtd_all["UNIDADE"].isin([_upper(u) for u in f_unids])]
 if "VISTORIADOR" in mtd_all.columns and len(f_vists):
     mtd_all = mtd_all[mtd_all["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+if perfil_sel != "Todos" and "VISTORIADOR" in mtd_all.columns:
+    mtd_all = mtd_all[mtd_all["VISTORIADOR"].map(_perfil_vistoriador) == perfil_target]
 
 erros_mtd_total = int(len(mtd_all))
 erros_mtd_gg = int(mtd_all["GRAVIDADE"].isin(grav_gg).sum()) if "GRAVIDADE" in mtd_all.columns else 0
@@ -657,6 +702,8 @@ if start_d == end_d == today_local:
         df_yest = df_yest[df_yest["UNIDADE"].isin([_upper(u) for u in f_unids])]
     if len(f_vists) and "VISTORIADOR" in df_yest.columns:
         df_yest = df_yest[df_yest["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+    if perfil_sel != "Todos" and "VISTORIADOR" in df_yest.columns:
+        df_yest = df_yest[df_yest["VISTORIADOR"].map(_perfil_vistoriador) == perfil_target]
 
     if "DATA_TS" not in df_yest.columns:
         df_yest["DATA_TS"] = pd.to_datetime(df_yest["DATA"], errors="coerce")
@@ -1179,13 +1226,22 @@ if prod["vist"].sum() == 0:
                 prod_month["VISTORIADOR"].isin([_upper(v) for v in f_vists])
             ]
 
+        # aplica perfil novato/veterano
+        if perfil_sel != "Todos" and "VISTORIADOR" in prod_month.columns:
+            prod_month = prod_month[
+                prod_month["VISTORIADOR"].map(_perfil_vistoriador) == perfil_target
+            ]
+
         prod = _make_prod(prod_month)
         if prod["vist"].sum() > 0:
             fallback_note = "Sem dados de produção no recorte atual; usando produção do mês inteiro."
 
 # Se ainda assim zerar, usa tudo que existe na produção
 if prod["vist"].sum() == 0 and not dfP.empty:
-    prod = _make_prod(dfP.copy())
+    prod_all = dfP.copy()
+    if perfil_sel != "Todos" and "VISTORIADOR" in prod_all.columns:
+        prod_all = prod_all[prod_all["VISTORIADOR"].map(_perfil_vistoriador) == perfil_target]
+    prod = _make_prod(prod_all)
     if prod["vist"].sum() > 0:
         fallback_note = "Sem dados de produção no mês selecionado; usando produção global disponível."
 
@@ -1656,3 +1712,6 @@ else:
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo ERRO é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
+
+
+
