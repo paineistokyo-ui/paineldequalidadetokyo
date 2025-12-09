@@ -1725,32 +1725,38 @@ else:
             label_mes = f"{mes:02d}/{ano}"
             labels_legenda.append(label_mes)
 
-            # Recorte de QUALIDADE daquele mês
-            dq_m = dfQ.copy()
-            dt_q = pd.to_datetime(dq_m["DATA"], errors="coerce")
-            mask_mq = (dt_q.dt.year.eq(ano) & dt_q.dt.month.eq(mes))
-            dq_m = dq_m[mask_mq].copy()
-
-            # Mesmos filtros de UNIDADE e PERFIL (Tempo de casa)
-            if len(f_unids) and "UNIDADE" in dq_m.columns:
-                dq_m = dq_m[dq_m["UNIDADE"].isin([_upper(u) for u in f_unids])]
-            if "TEMPO_CASA" in dq_m.columns and perfil_sel != "Todos":
-                alvo = "NOVATO" if perfil_sel == "Novatos" else "VETERANO"
-                dq_m = dq_m[dq_m["TEMPO_CASA"] == alvo]
-
-            # Recorte de PRODUÇÃO daquele mês
-            if not dfP.empty:
-                dp_m = dfP.copy()
-                dt_p = pd.to_datetime(dp_m["__DATA__"], errors="coerce")
-                mask_mp = (dt_p.dt.year.eq(ano) & dt_p.dt.month.eq(mes))
-                dp_m = dp_m[mask_mp].copy()
-
-                if len(f_unids) and "UNIDADE" in dp_m.columns:
-                    dp_m = dp_m[dp_m["UNIDADE"].isin([_upper(u) for u in f_unids])]
-                if set_vists_perfil is not None and "VISTORIADOR" in dp_m.columns:
-                    dp_m = dp_m[dp_m["VISTORIADOR"].isin(set_vists_perfil)]
+            # --------- BASE DE QUALIDADE E PRODUÇÃO POR MÊS ---------
+            if ym == ym_sel:
+                # MÊS ATUAL → usa exatamente o mesmo recorte do painel
+                dq_m = viewQ.copy()
+                dp_m = viewP.copy()
             else:
-                dp_m = dfP.copy()
+                # MÊS ANTERIOR → mês cheio, com mesmos filtros de unidade/perfil
+                # Qualidade
+                dq_m = dfQ.copy()
+                dt_q = pd.to_datetime(dq_m["DATA"], errors="coerce")
+                mask_mq = (dt_q.dt.year.eq(ano) & dt_q.dt.month.eq(mes))
+                dq_m = dq_m[mask_mq].copy()
+
+                if len(f_unids) and "UNIDADE" in dq_m.columns:
+                    dq_m = dq_m[dq_m["UNIDADE"].isin([_upper(u) for u in f_unids])]
+                if "TEMPO_CASA" in dq_m.columns and perfil_sel != "Todos":
+                    alvo = "NOVATO" if perfil_sel == "Novatos" else "VETERANO"
+                    dq_m = dq_m[dq_m["TEMPO_CASA"] == alvo]
+
+                # Produção
+                if not dfP.empty:
+                    dp_m = dfP.copy()
+                    dt_p = pd.to_datetime(dp_m["__DATA__"], errors="coerce")
+                    mask_mp = (dt_p.dt.year.eq(ano) & dt_p.dt.month.eq(mes))
+                    dp_m = dp_m[mask_mp].copy()
+
+                    if len(f_unids) and "UNIDADE" in dp_m.columns:
+                        dp_m = dp_m[dp_m["UNIDADE"].isin([_upper(u) for u in f_unids])]
+                    if set_vists_perfil is not None and "VISTORIADOR" in dp_m.columns:
+                        dp_m = dp_m[dp_m["VISTORIADOR"].isin(set_vists_perfil)]
+                else:
+                    dp_m = dfP.copy()
 
             # Produção agrupada (reaproveita função _make_prod)
             prod_m = _make_prod(dp_m)
@@ -1850,9 +1856,9 @@ else:
         # Colunas na ordem: nome, situação, reincidência, depois meses
         cols_show = ["VISTORIADOR", "Situação", "Meses no bottom"]
         for label_mes in labels_legenda:
-            pct_col    = f"%Erro {label_mes}"
-            pctgg_col  = f"%Erro GG {label_mes}"
-            btm_col    = f"Bottom {label_mes}"
+            pct_col   = f"%Erro {label_mes}"
+            pctgg_col = f"%Erro GG {label_mes}"
+            btm_col   = f"Bottom {label_mes}"
             if pct_col in hist_df.columns:
                 cols_show.append(pct_col)
             if pctgg_col in hist_df.columns:
