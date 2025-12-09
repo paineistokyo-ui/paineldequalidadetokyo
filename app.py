@@ -1803,6 +1803,13 @@ else:
 
             hist_df = hist_df.merge(tmp, on="VISTORIADOR", how="left")
 
+        # --- GARANTIR QUE O MÊS ATUAL USE EXATAMENTE O TOP 5 DO PAINEL ---
+        if labels_legenda:
+            col_bottom_cur = f"Bottom {labels_legenda[-1]}"
+            if col_bottom_cur in hist_df.columns:
+                nomes_bottom_atual = [str(v) for v in bottom_names]
+                hist_df[col_bottom_cur] = hist_df["VISTORIADOR"].astype(str).isin(nomes_bottom_atual)
+
         # Calcula quantos meses cada um apareceu no bottom
         bottom_cols = [c for c in hist_df.columns if c.startswith("Bottom ")]
         if bottom_cols:
