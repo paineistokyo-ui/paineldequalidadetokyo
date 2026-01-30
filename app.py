@@ -382,12 +382,14 @@ dfMetas = pd.concat(metas_all, ignore_index=True) if metas_all else pd.DataFrame
 # ------------------ DATAS NORMALIZADAS (UMA VEZ) ------------------
 dfQ["DATA_DT"] = pd.to_datetime(dfQ["DATA"], errors="coerce")          # timestamp (sem perder hora, se existir)
 dfQ["DATA_D"]  = dfQ["DATA_DT"].dt.date                                 # date (rápido para between)
-dfQ["YM"]      = dfQ["DATA_DT"].dt.to_period("M").astype(str)           # AAAA-MM
+dfQ["YM"] = dfQ["DATA_DT"].dt.to_period("M").astype(str)
+dfQ.loc[dfQ["DATA_DT"].isna(), "YM"] = np.nan  # impede "NaT" virar mês
 
 if not dfP.empty:
     dfP["DATA_DT"] = pd.to_datetime(dfP["__DATA__"], errors="coerce")
     dfP["DATA_D"]  = dfP["DATA_DT"].dt.date
     dfP["YM"]      = dfP["DATA_DT"].dt.to_period("M").astype(str)
+    dfP.loc[dfP["DATA_DT"].isna(), "YM"] = np.nan
     
 # Normaliza TEMPO_CASA (NOVATO / VETERANO) — IGUAL STARCHECK
 if "TEMPO_CASA" in dfQ.columns:
@@ -398,7 +400,7 @@ if "TEMPO_CASA" in dfQ.columns:
 if "EMPRESA" in dfQ.columns:
     dfQ = dfQ[dfQ["EMPRESA"] == "TOKYO"].copy()
 
-ym_all = sorted(dfQ["YM"].dropna().unique().tolist())
+ym_all = sorted([m for m in dfQ["YM"].dropna().unique().tolist() if str(m).strip().upper() != "NAT"])
 if not ym_all:
     st.error("Qualidade sem colunas de Data válidas."); st.stop()
 
@@ -427,8 +429,13 @@ mask_meses_q = dfQ["YM"].isin(ym_sels_set)
 dfQ_win = dfQ[mask_meses_q].copy()
 
 # Período (dentro da janela de meses selecionados)
-s_win_dates = dfQ_win["DATA_D"]
-min_d, max_d = min(s_win_dates.dropna()), max(s_win_dates.dropna())
+s_win_dates = dfQ_win["DATA_D"].dropna()
+
+if s_win_dates.empty:
+    st.warning("O recorte selecionado não tem datas válidas (DATA vazia/ inválida). Remova o mês '/NaT' ou corrija a coluna DATA na base.")
+    st.stop()
+
+min_d, max_d = s_win_dates.min(), s_win_dates.max()
 
 with col1:
     drange = st.date_input(
