@@ -1807,7 +1807,7 @@ def _build_month_base(dq_m, dp_m):
 
     base_m = prod_m.merge(qual_m, on="VISTORIADOR", how="outer").fillna(0)
 
-    # FIX: força numérico (evita dtype object no round)
+    # força numérico (evita dtype object no round)
     for c in ["vist", "rev", "liq", "erros", "erros_gg"]:
         if c not in base_m.columns:
             base_m[c] = 0
@@ -1822,18 +1822,40 @@ def _build_month_base(dq_m, dp_m):
     return base_m
 
 def _fora_meta(base_m):
-    den = base_m["liq"] if denom_mode.startswith("Líquida") else base_m["vist"]
-    base_m = base_m[den > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
+    """
+    Retorna lista de VISTORIADOR fora da meta no mês, respeitando:
+    - denominador (Bruta/Líquida)
+    - critério selecionado (total vs qualquer meta)
+    - metas por cidade (TOKYO) via _metas_cidade + city_map
+    """
+    base_m = base_m.copy()
 
+    den_col = "liq" if denom_mode.startswith("Líquida") else "vist"
+    den = pd.to_numeric(base_m.get(den_col, 0), errors="coerce").astype(float)
+
+    base_m = base_m[(den > 0)].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
     if base_m.empty:
         return []
 
+    # cidade por vistoriador (usa city_map já montado no painel)
+    base_m["CIDADE"] = base_m["VISTORIADOR"].map(city_map).fillna("")
+
+    # metas por cidade (retorna (meta_total, meta_gg))
+    metas = base_m["CIDADE"].apply(
+        lambda c: pd.Series(_metas_cidade(c), index=["META_ERRO", "META_ERRO_GG"])
+    )
+    base_m = pd.concat([base_m, metas], axis=1)
+
+    # garante numérico
+    base_m["%ERRO"] = pd.to_numeric(base_m["%ERRO"], errors="coerce")
+    base_m["%ERRO_GG"] = pd.to_numeric(base_m["%ERRO_GG"], errors="coerce")
+
     if crit.startswith("%Erro total"):
-        bad = base_m[base_m["%ERRO"] > META_ERRO]
+        bad = base_m[base_m["%ERRO"] > base_m["META_ERRO"]]
     else:
         bad = base_m[
-            (base_m["%ERRO"] > META_ERRO) |
-            (base_m["%ERRO_GG"] > META_ERRO_GG)
+            (base_m["%ERRO"] > base_m["META_ERRO"]) |
+            (base_m["%ERRO_GG"] > base_m["META_ERRO_GG"])
         ]
 
     return bad["VISTORIADOR"].astype(str).tolist()
